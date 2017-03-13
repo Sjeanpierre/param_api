@@ -47,6 +47,7 @@ func (p paramRequest) identifier() string {
 
 var (
 	CACHE = make(map[string]Response)
+	region = os.Getenv("AWS_REGION")
 )
 
 func main() {
@@ -58,6 +59,10 @@ func api() {
 	registerHandlers(router)
 	loggedRouter := handlers.LoggingHandler(os.Stdout, router)
 	log.Println("Validating Config") //todo, validate config
+	if region == "" {
+		log.Fatal("Environment variable AWS_REGION undefined")
+		//todo, check against list of known regions
+	}
 	log.Println("Started: Ready to serve")
 	log.Fatal(http.ListenAndServe(":8080", loggedRouter)) //todo, refactor to make port dynamic
 }
@@ -68,7 +73,7 @@ func registerHandlers(r *mux.Router) {
 
 }
 
-func paramRequestBody(b io.ReadCloser)  paramRequest{
+func parseParamRequestBody(b io.ReadCloser)  paramRequest{
 	decoder := json.NewDecoder(b)
 	var p paramRequest
 	err := decoder.Decode(&p)
@@ -80,13 +85,13 @@ func paramRequestBody(b io.ReadCloser)  paramRequest{
 }
 
 func (p paramRequest) getData()  map[string]string{
-	c := ssmClient{NewClient("us-east-2")}
+	c := ssmClient{NewClient(region)}
 	paramNames := c.WithPrefix(p.envPrefix())
 	return paramNames.IncludeHistory(c).withVersion(p.Version) //todo, return error
 }
 
 func envHandler(w http.ResponseWriter, r *http.Request) {
-	p := paramRequestBody(r.Body)
+	p := parseParamRequestBody(r.Body)
 	if !p.valid() {
 		badRequest(w, p)
 		return
@@ -98,8 +103,14 @@ func envHandler(w http.ResponseWriter, r *http.Request) {
 		JSONResponseHandler(w, cached)
 		return
 	}
-	resp := Response{status:http.StatusOK, Data:p.getData()} //todo, check length of list before returning
-	CACHE[p.cacheKey()] = resp //todo, dont cache if empty
+	data := p.getData()
+	resp := Response{status:http.StatusOK, Data:data} //todo, check length of list before returning
+	//only cache data when elements were found
+	//possible bug - existing versions where new elements are added will still return cached data
+	//should not be a problem since container will be restarted upon config changes
+	if len(data) > 0 {
+		CACHE[p.cacheKey()] = resp
+	}
 	JSONResponseHandler(w, resp)
 }
 
