@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"encoding/json"
 	"fmt"
-        "crypto/sha256"
+  "crypto/sha256"
 	"strings"
 	"io"
 )
@@ -48,6 +48,7 @@ func (p paramRequest) identifier() string {
 var (
 	CACHE = make(map[string]Response)
 	region = os.Getenv("AWS_REGION")
+	cliVersion = "0.0.1"
 )
 
 func main() {
