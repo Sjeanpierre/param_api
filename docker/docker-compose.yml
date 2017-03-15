@@ -1,7 +1,9 @@
 version: '2'
 services:
-  aws-param-store-api:
-    build: .
+  param-store-api:
+    build:
+      context: ../
+      dockerfile: ./docker/Dockerfile
     ports:
      - "8080:8080"
     environment:
