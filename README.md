@@ -50,7 +50,7 @@ AWS_REGION={SOME_REGION} TAG={SOME_DOCKER_IMAGE_TAG} docker-compose -f docker/do
 | Standalone  | You can set this application up by building the Docker image for it and running it on a single server. You will need to allow http requests to that server on port 8080  |
 | Multi-Container  | You can setup this application through a multi-container approach through AWS Elastic Beanstalk, AWS ECS, or on any server using docker-compose with multiple container definitions. |
 
-The param-store-api will return JSON data with the environment variables( key/value ). It's up to you if you want to perform the HTTP request via command line and then export the values, or if you want your application make the HTTP request and interpret the variabls.
+`The param-store-api will return JSON data with the environment variables( key/value ). It's up to you if you want to perform the HTTP request via command line and then export the values, or if you want your application make the HTTP request and interpret the variabls.`
 
 ## Usage
 
