@@ -37,7 +37,7 @@ func (s ssmClient) WithPrefix(prefix string) parameters{
 	var names parameters
 	resp,err := s.ParamList(prefix)
 	if err != nil {
-		log.Println("Encountered an error listing params")
+		log.Println("Encountered an error listing params", err)
 		return parameters{}
 	}
 	for _,param := range resp.Parameters {
