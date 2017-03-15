@@ -1,6 +1,6 @@
 FROM alpine:3.3
 
-RUN apk add --no-cache mysql-client
+RUN apk --update add ca-certificates
 
 ADD ./bin/param-api-latest /bin/param-api
 
