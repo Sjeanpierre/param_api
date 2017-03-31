@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"encoding/json"
 	"fmt"
-  "crypto/sha256"
+	"crypto/sha256"
 	"strings"
 	"io"
 )
@@ -42,13 +42,13 @@ func (p paramRequest) cacheKey() string {
 }
 
 func (p paramRequest) identifier() string {
-	return fmt.Sprintf("%s@%s", p.envPrefix(),p.Version)
+	return fmt.Sprintf("%s@%s", p.envPrefix(), p.Version)
 }
 
 var (
 	CACHE = make(map[string]Response)
 	region = os.Getenv("AWS_REGION")
-	cliVersion = "0.0.1"
+	Version = "0.0.1"
 )
 
 func main() {
@@ -71,21 +71,20 @@ func api() {
 func registerHandlers(r *mux.Router) {
 	r.NotFoundHandler = http.HandlerFunc(notFoundHandler)
 	r.HandleFunc("/params", envHandler).Methods("POST")
-
 }
 
-func parseParamRequestBody(b io.ReadCloser)  paramRequest{
+func parseParamRequestBody(b io.ReadCloser) paramRequest {
 	decoder := json.NewDecoder(b)
 	var p paramRequest
 	err := decoder.Decode(&p)
 	if err != nil {
-		log.Printf("encountered issue decoding request body; %s",err.Error())
+		log.Printf("encountered issue decoding request body; %s", err.Error())
 		return paramRequest{}
 	}
-	return  p
+	return p
 }
 
-func (p paramRequest) getData()  map[string]string{
+func (p paramRequest) getData() map[string]string {
 	c := ssmClient{NewClient(region)}
 	paramNames := c.WithPrefix(p.envPrefix())
 	return paramNames.IncludeHistory(c).withVersion(p.Version) //todo, return error
@@ -97,8 +96,8 @@ func envHandler(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, p)
 		return
 	}
-	log.Printf("Processing request for %s uniquely identified as %+v", p.identifier(),p.cacheKey())
-	cached,ok := CACHE[p.cacheKey()]
+	log.Printf("Processing request for %s uniquely identified as %+v", p.identifier(), p.cacheKey())
+	cached, ok := CACHE[p.cacheKey()]
 	if ok {
 		log.Printf("Retrieved parameters from cache")
 		JSONResponseHandler(w, cached)
@@ -109,7 +108,8 @@ func envHandler(w http.ResponseWriter, r *http.Request) {
 	//only cache data when elements were found
 	//possible bug - existing versions where new elements are added will still return cached data
 	//should not be a problem since container will be restarted upon config changes
-	if len(data) > 0 {
+	//latest is treated as a special version indicator which should not be cached
+	if len(data) > 0 && p.Version != "latest" {
 		CACHE[p.cacheKey()] = resp
 	}
 	JSONResponseHandler(w, resp)
@@ -119,7 +119,7 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var m = make(map[string]string)
 	m["error"] = fmt.Sprintf("Route %s not found with method %s, please check request and try again",
-		r.URL.Path,r.Method)
+		r.URL.Path, r.Method)
 	resp := Response{Data:m, status:http.StatusNotFound}
 	JSONResponseHandler(w, resp)
 }
