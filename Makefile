@@ -1,7 +1,7 @@
 # Generate tarball with new build of param_api
 #
 # NOTE: OSX only
-VERSION=$$(cat main.go | grep -i "cliVersion =" | awk {'print$$3'} | tr -d '"')
+VERSION=$$(cat main.go | grep -i "AppVersion =" | awk {'print$3'} | tr -d '"')
 
 
 all: clean build compress report
