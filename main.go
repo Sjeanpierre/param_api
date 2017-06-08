@@ -47,7 +47,7 @@ func (p paramRequest) identifier() string {
 
 var (
 	CACHE = make(map[string]Response)
-	region = "us-east-2"//os.Getenv("AWS_REGION")
+	region = os.Getenv("AWS_REGION")
 )
 
 func main() {
