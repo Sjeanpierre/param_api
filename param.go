@@ -8,6 +8,11 @@ import (
 	"log"
 	"strings"
 	"errors"
+	"encoding/base64"
+	"compress/gzip"
+	"io/ioutil"
+	"encoding/json"
+	"bytes"
 )
 
 type ssmClient struct {
@@ -15,33 +20,36 @@ type ssmClient struct {
 }
 
 type parameter struct {
-	Name string
+	Name     string
 	Versions []paramHistory
-
 }
 
 type parameters []parameter
 
 type paramHistory struct {
-	Value string
+	Value   string
 	Version string
 }
 
 func NewClient(region string) *ssm.SSM {
 	session := session.Must(session.NewSession())
-	session.Config.WithRegion(region)
+	if DebugMode {
+		session.Config.WithRegion(region).WithLogLevel(aws.LogDebugWithHTTPBody)//.WithMaxRetries(2)
+	} else {
+		session.Config.WithRegion(region)
+	}
 	return ssm.New(session)
 }
 
-func (s ssmClient) WithPrefix(prefix string) parameters{
+func (s ssmClient) WithPrefix(prefix string) parameters {
 	var names parameters
-	resp,err := s.ParamList(prefix)
+	resp, err := s.ParamList(prefix)
 	if err != nil {
 		log.Println("Encountered an error listing params", err)
 		return parameters{}
 	}
-	for _,param := range resp.Parameters {
-		names = append(names,parameter{*param.Name,[]paramHistory{}})
+	for _, param := range resp.Parameters {
+		names = append(names, parameter{*param.Name, []paramHistory{}})
 	}
 	return names
 }
@@ -62,16 +70,17 @@ func (s ssmClient) ParamList(filter string) (*ssm.DescribeParametersOutput, erro
 	return s.client.DescribeParameters(params)
 }
 
-func (p parameters) IncludeHistory(s ssmClient) parameters{
+func (p parameters) IncludeHistory(s ssmClient) parameters {
 	var params parameters
-	for _,param := range p {
+	for _, param := range p {
 		param.history(s)
-		params = append(params,param)
+		params = append(params, param)
 	}
 	return params
 }
 
-func (p *parameter) history(s ssmClient) {//todo, return error
+func (p *parameter) history(s ssmClient) {
+	//todo, return error
 	pi := &ssm.GetParametersInput{
 		Names: []*string{&p.Name},
 		WithDecryption: aws.Bool(true),
@@ -96,41 +105,78 @@ func (p *parameter) history(s ssmClient) {//todo, return error
 		return
 	}
 	//todo, guard against empty param
-	p.Versions = append(p.Versions,paramHistory{Value:*r.Parameters[0].Value,Version:*re.Parameters[0].Description})
+	//this is being done in order to get the current version description
+	p.Versions = append(p.Versions, paramHistory{Value:*r.Parameters[0].Value, Version:*re.Parameters[0].Description})
 	var hist []paramHistory
 	var des string
-	for _,param := range resp.Parameters {
-		if param.Description != nil{
+	for _, param := range resp.Parameters {
+		if param.Description != nil {
 			des = *param.Description
 
 		}
 		val := *param.Value
-		hist = append(hist,paramHistory{Value:val,Version:des })
+		hist = append(hist, paramHistory{Value:val, Version:des })
 	}
-	p.Versions = append(p.Versions,hist...)
+	p.Versions = append(p.Versions, hist...)
 	return
 }
 
-func (p parameters) withVersion(version string) map[string]string{
+func (p parameters) withVersion(version string) map[string]string {
 	paramsDoc := make(map[string]string)
-	for _,param := range p {
-		ver,err := param.containsVersion(version)
+	//todo, deserialize right here
+
+	for _, param := range p {
+		ver, err := param.containsVersion(version)
 		if err != nil {
-			log.Printf("Error: could not find version: %v for param %v",version,param.Name)
+			log.Printf("Error: could not find version: %v for param %v", version, param.Name)
 			continue
 		}
-		ParsedName := strings.Split(param.Name,".") //todo, check if envName matches ENV VAR regex
+		if SingleKeyMode {
+			decodedData, err := Deserialize(ver.Value)
+			if err != nil {
+				log.Printf("Could not retrieve single key param: %s", err.Error())
+				continue
+			}
+			return decodedData
+		}
+		ParsedName := strings.Split(param.Name, ".") //todo, check if envName matches ENV VAR regex
 		envName := ParsedName[len(ParsedName) - 1]
 		paramsDoc[envName] = ver.Value
 	}
 	return paramsDoc
 }
 
-func (p parameter) containsVersion(version string) (paramHistory,error) {
-	for _,v := range p.Versions {
+func Deserialize(encoded string) (map[string]string, error) {
+	params := make(map[string]string)
+	compressed, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		error := fmt.Sprintf("Error decoding value returned by single key param: %s", err.Error())
+		return params, errors.New(error)
+	}
+	gz, err := gzip.NewReader(bytes.NewBuffer(compressed))
+	defer gz.Close()
+	if err != nil {
+		error := fmt.Sprintf("Error decompressing value returned by single key param: %s", err.Error())
+		return params, errors.New(error)
+	}
+	jsonData, err := ioutil.ReadAll(gz)
+	if err != nil {
+		error := fmt.Sprintf("Error reading decompressed json stream: %s", err.Error())
+		return params, errors.New(error)
+	}
+	err = json.Unmarshal(jsonData, &params)
+	if err != nil {
+		error := fmt.Sprintf("Error unmarshalling JSON to struct: %s", err.Error())
+		return params, errors.New(error)
+	}
+	return params, nil
+}
+
+func (p parameter) containsVersion(version string) (paramHistory, error) {
+	for _, v := range p.Versions {
 		if v.Version == version {
-			return v,nil
+			return v, nil
 		}
 	}
-	return paramHistory{},errors.New("Could not find version")
+	return paramHistory{}, errors.New("Could not find version")
 }

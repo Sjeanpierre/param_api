@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"strings"
 	"io"
+	"strconv"
 )
 
 type Response struct {
@@ -46,8 +47,12 @@ func (p paramRequest) identifier() string {
 }
 
 var (
+	DebugMode = false
+	SingleKeyMode = false
 	CACHE = make(map[string]Response)
 	region = os.Getenv("AWS_REGION")
+	debug = os.Getenv("DEBUG")
+	SingleKey = os.Getenv("SINGLE_KEY_MODE")
 )
 
 func main() {
@@ -62,6 +67,28 @@ func api() {
 	if region == "" {
 		log.Fatal("Environment variable AWS_REGION undefined")
 		//todo, check against list of known regions
+	}
+	//in debug mode no caching takes place
+	//logs are produced in greater detail
+	if debug != "" {
+		log.Printf("DEBUG flag set to %+v - attempting to parse to boolean",debug)
+		debugenabled, err := strconv.ParseBool(debug)
+		if err != nil {
+			log.Printf("Warning: Could not parse debug flag, value provided was %s\n %s", DebugMode, err.Error())
+			log.Println("debug mode: false")
+			DebugMode = false
+		} else {
+			DebugMode = debugenabled
+			log.Printf("debug mode set to %+v",DebugMode)
+		}
+	}
+	if SingleKey != "" {
+		sk, err := strconv.ParseBool(SingleKey)
+		if err != nil {
+			log.Fatalf("Could not start application, unknown value '%v' set " +
+				"for SINGLE_KEY_MODE ENV VAR - true or false required",SingleKey)
+		}
+		SingleKeyMode = sk
 	}
 	log.Println("Started: Ready to serve")
 	log.Fatal(http.ListenAndServe(":8080", loggedRouter)) //todo, refactor to make port dynamic
@@ -85,7 +112,12 @@ func parseParamRequestBody(b io.ReadCloser) paramRequest {
 
 func (p paramRequest) getData() map[string]string {
 	c := ssmClient{NewClient(region)}
-	paramNames := c.WithPrefix(p.envPrefix())
+	if SingleKeyMode {
+		paramName := c.WithPrefix(fmt.Sprintf("%s.%s.%s.%s", p.Landscape, p.Environment, p.Application,p.Version))
+		return paramName.IncludeHistory(c).withVersion(p.Version)
+
+	}
+	paramNames := c.WithPrefix(p.envPrefix()) //todo, provide the full known param, is composite key
 	return paramNames.IncludeHistory(c).withVersion(p.Version) //todo, return error
 }
 
@@ -98,9 +130,14 @@ func envHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Processing request for %s uniquely identified as %+v", p.identifier(), p.cacheKey())
 	cached, ok := CACHE[p.cacheKey()]
 	if ok {
-		log.Printf("Retrieved parameters from cache")
-		JSONResponseHandler(w, cached)
-		return
+		if DebugMode {
+			log.Println("Bypassing response cache due to debug mode")
+		} else {
+			log.Printf("Retrieved parameters from cache")
+			JSONResponseHandler(w, cached)
+			return
+
+		}
 	}
 	data := p.getData()
 	resp := Response{status:http.StatusOK, Data:data} //todo, check length of list before returning
@@ -109,7 +146,12 @@ func envHandler(w http.ResponseWriter, r *http.Request) {
 	//should not be a problem since container will be restarted upon config changes
 	//latest is treated as a special version indicator which should not be cached
 	if len(data) > 0 && p.Version != "latest" {
-		CACHE[p.cacheKey()] = resp
+		if DebugMode {
+			log.Println("Skipping response caching due to debug mode")
+		} else {
+			log.Println("Caching result set")
+			CACHE[p.cacheKey()] = resp
+		}
 	}
 	JSONResponseHandler(w, resp)
 }
