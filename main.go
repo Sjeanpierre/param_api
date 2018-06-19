@@ -1,17 +1,18 @@
 package main
 
 import (
-	"log"
-	"github.com/gorilla/mux"
-	"github.com/gorilla/handlers"
-	"os"
-	"net/http"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"crypto/sha256"
-	"strings"
 	"io"
+	"log"
+	"net/http"
+	"os"
 	"strconv"
+	"strings"
+
+	"github.com/gorilla/handlers"
+	"github.com/gorilla/mux"
 )
 
 type Response struct {
@@ -47,12 +48,12 @@ func (p paramRequest) identifier() string {
 }
 
 var (
-	DebugMode = false
+	DebugMode     = false
 	SingleKeyMode = false
-	CACHE = make(map[string]Response)
-	region = os.Getenv("AWS_REGION")
-	debug = os.Getenv("DEBUG")
-	SingleKey = os.Getenv("SINGLE_KEY_MODE")
+	CACHE         = make(map[string]Response)
+	region        = os.Getenv("AWS_REGION")
+	debug         = os.Getenv("DEBUG")
+	SingleKey     = os.Getenv("SINGLE_KEY_MODE")
 )
 
 func main() {
@@ -71,7 +72,7 @@ func api() {
 	//in debug mode no caching takes place
 	//logs are produced in greater detail
 	if debug != "" {
-		log.Printf("DEBUG flag set to %+v - attempting to parse to boolean",debug)
+		log.Printf("DEBUG flag set to %+v - attempting to parse to boolean", debug)
 		debugenabled, err := strconv.ParseBool(debug)
 		if err != nil {
 			log.Printf("Warning: Could not parse debug flag, value provided was %s\n %s", DebugMode, err.Error())
@@ -79,14 +80,14 @@ func api() {
 			DebugMode = false
 		} else {
 			DebugMode = debugenabled
-			log.Printf("debug mode set to %+v",DebugMode)
+			log.Printf("debug mode set to %+v", DebugMode)
 		}
 	}
 	if SingleKey != "" {
 		sk, err := strconv.ParseBool(SingleKey)
 		if err != nil {
-			log.Fatalf("Could not start application, unknown value '%v' set " +
-				"for SINGLE_KEY_MODE ENV VAR - true or false required",SingleKey)
+			log.Fatalf("Could not start application, unknown value '%v' set "+
+				"for SINGLE_KEY_MODE ENV VAR - true or false required", SingleKey)
 		}
 		SingleKeyMode = sk
 	}
@@ -97,6 +98,7 @@ func api() {
 func registerHandlers(r *mux.Router) {
 	r.NotFoundHandler = http.HandlerFunc(notFoundHandler)
 	r.HandleFunc("/params", envHandler).Methods("POST")
+	r.HandleFunc("/service/health", healthHandler).Methods("GET")
 }
 
 func parseParamRequestBody(b io.ReadCloser) paramRequest {
@@ -122,6 +124,19 @@ func (p paramRequest) getData() map[string]string {
 	return paramNames.IncludeHistory(c).withVersion(p.Version) //todo, return error
 }
 
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var m = make(map[string]string)
+
+	m["region"] = region
+	m["single_key"] = fmt.Sprintf("%t", SingleKeyMode)
+	m["debug"] = fmt.Sprintf("%t", DebugMode)
+
+	resp := Response{status: http.StatusOK, Data: m} //todo, check length of list before returning
+
+	JSONResponseHandler(w, resp)
+}
+
 func envHandler(w http.ResponseWriter, r *http.Request) {
 	p := parseParamRequestBody(r.Body)
 	if !p.valid() {
@@ -141,7 +156,7 @@ func envHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data := p.getData()
-	resp := Response{status:http.StatusOK, Data:data} //todo, check length of list before returning
+	resp := Response{status: http.StatusOK, Data: data} //todo, check length of list before returning
 	//only cache data when elements were found
 	//possible bug - existing versions where new elements are added will still return cached data
 	//should not be a problem since container will be restarted upon config changes
@@ -162,7 +177,7 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	var m = make(map[string]string)
 	m["error"] = fmt.Sprintf("Route %s not found with method %s, please check request and try again",
 		r.URL.Path, r.Method)
-	resp := Response{Data:m, status:http.StatusNotFound}
+	resp := Response{Data: m, status: http.StatusNotFound}
 	JSONResponseHandler(w, resp)
 }
 
@@ -171,7 +186,7 @@ func badRequest(w http.ResponseWriter, p paramRequest) {
 	var m = make(map[string]string)
 	expected := strings.ToLower(fmt.Sprintf("%+v", paramRequest{"STRING", "STRING", "STRING", "STRING"}))
 	m["error"] = fmt.Sprintf("Bad request, expected: %s, got: %s", expected, strings.ToLower(fmt.Sprintf("%+v", p)))
-	resp := Response{Data:m, status:http.StatusBadRequest}
+	resp := Response{Data: m, status: http.StatusBadRequest}
 	JSONResponseHandler(w, resp)
 }
 
