@@ -113,8 +113,9 @@ func parseParamRequestBody(b io.ReadCloser) paramRequest {
 func (p paramRequest) getData() map[string]string {
 	c := ssmClient{NewClient(region)}
 	if SingleKeyMode {
-		paramName := c.WithPrefix(fmt.Sprintf("%s.%s.%s.%s", p.Landscape, p.Environment, p.Application,p.Version))
-		return paramName.IncludeHistory(c).withVersion(p.Version)
+		//paramName := c.WithPrefix(fmt.Sprintf("%s.%s.%s.%s", p.Landscape, p.Environment, p.Application,p.Version))
+		//return paramName.IncludeHistory(c).withVersion(p.Version)
+		return c.SingleParam(fmt.Sprintf("%s.%s.%s.%s", p.Landscape, p.Environment, p.Application,p.Version))
 
 	}
 	paramNames := c.WithPrefix(p.envPrefix()) //todo, provide the full known param, is composite key

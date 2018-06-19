@@ -34,11 +34,28 @@ type paramHistory struct {
 func NewClient(region string) *ssm.SSM {
 	session := session.Must(session.NewSession())
 	if DebugMode {
-		session.Config.WithRegion(region).WithLogLevel(aws.LogDebugWithHTTPBody)//.WithMaxRetries(2)
+		session.Config.WithRegion(region).WithLogLevel(aws.LogDebugWithHTTPBody) //.WithMaxRetries(2)
 	} else {
 		session.Config.WithRegion(region)
 	}
 	return ssm.New(session)
+}
+
+func (s ssmClient) SingleParam(paramName string) map[string]string {
+	empty := make(map[string]string)
+	pi := &ssm.GetParameterInput{Name: &paramName,
+		WithDecryption: aws.Bool(true)}
+	r, err := s.client.GetParameter(pi)
+	if err != nil {
+		fmt.Println(err.Error())
+		return empty
+	}
+	ret, err := Deserialize(*r.Parameter.Value)
+	if err != nil {
+		fmt.Println(err)
+		return empty
+	}
+	return ret
 }
 
 func (s ssmClient) WithPrefix(prefix string) parameters {
@@ -82,11 +99,11 @@ func (p parameters) IncludeHistory(s ssmClient) parameters {
 func (p *parameter) history(s ssmClient) {
 	//todo, return error
 	pi := &ssm.GetParametersInput{
-		Names: []*string{&p.Name},
+		Names:          []*string{&p.Name},
 		WithDecryption: aws.Bool(true),
 	}
 	hpi := &ssm.GetParameterHistoryInput{
-		Name: &p.Name,
+		Name:           &p.Name,
 		WithDecryption: aws.Bool(true),
 	}
 	resp, err := s.client.GetParameterHistory(hpi)
@@ -106,7 +123,7 @@ func (p *parameter) history(s ssmClient) {
 	}
 	//todo, guard against empty param
 	//this is being done in order to get the current version description
-	p.Versions = append(p.Versions, paramHistory{Value:*r.Parameters[0].Value, Version:*re.Parameters[0].Description})
+	p.Versions = append(p.Versions, paramHistory{Value: *r.Parameters[0].Value, Version: *re.Parameters[0].Description})
 	var hist []paramHistory
 	var des string
 	for _, param := range resp.Parameters {
@@ -115,7 +132,7 @@ func (p *parameter) history(s ssmClient) {
 
 		}
 		val := *param.Value
-		hist = append(hist, paramHistory{Value:val, Version:des })
+		hist = append(hist, paramHistory{Value: val, Version: des})
 	}
 	p.Versions = append(p.Versions, hist...)
 	return
@@ -140,7 +157,7 @@ func (p parameters) withVersion(version string) map[string]string {
 			return decodedData
 		}
 		ParsedName := strings.Split(param.Name, ".") //todo, check if envName matches ENV VAR regex
-		envName := ParsedName[len(ParsedName) - 1]
+		envName := ParsedName[len(ParsedName)-1]
 		paramsDoc[envName] = ver.Value
 	}
 	return paramsDoc
@@ -178,5 +195,5 @@ func (p parameter) containsVersion(version string) (paramHistory, error) {
 			return v, nil
 		}
 	}
-	return paramHistory{}, errors.New("Could not find version")
+	return paramHistory{}, errors.New("could not find version")
 }
