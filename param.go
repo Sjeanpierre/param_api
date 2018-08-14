@@ -77,15 +77,29 @@ func Deserialize(encoded string) (map[string]string, error) {
 //////
 //////
 func (s ssmClient) SingleParam(paramName string) map[string]string {
+	empty := make(map[string]string)
+
 	// Get requested parameter
 	CACHEREF[paramName] = s.CacheRequestedParam(paramName)
 
 	// Iterate over param data to get ssm:// references
 	for i := range CACHEREF[paramName] {
 		if strings.HasPrefix(CACHEREF[paramName][i], "ssm://") {
-			CACHEREF[paramName][i] = strings.Trim(CACHEREF[paramName][i], "ssm://")
-			CACHEREF[CACHEREF[paramName][i]] = s.CacheRequestedParam(CACHEREF[paramName][i])
-			CACHEREF[paramName][i] = CACHEREF[CACHEREF[paramName][i]][i]
+			// Trim the ssm:// off of the key so we know the full name of the param to get
+			keyName := strings.Trim(CACHEREF[paramName][i], "ssm://")
+
+			// Request param store for the key above and store it in the CACHEREF
+			CACHEREF[keyName] = s.CacheRequestedParam(keyName)
+
+			// If the reference json data has the key required, get the value
+			if val, ok := CACHEREF[keyName][i]; ok {
+				CACHEREF[paramName][i] = val
+				fmt.Printf("Found key %s with value %s", i, val)
+				// If the reference json data does not have the key we require, return empty
+			} else {
+				fmt.Printf("Not Found: key %s", i)
+				return empty
+			}
 		}
 	}
 	return CACHEREF[paramName]
