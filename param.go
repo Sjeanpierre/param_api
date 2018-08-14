@@ -80,7 +80,11 @@ func (s ssmClient) SingleParam(paramName string) map[string]string {
 	empty := make(map[string]string)
 
 	// Get requested parameter
-	CACHEREF[paramName] = s.CacheRequestedParam(paramName)
+	paramData, err := s.CacheRequestedParam(paramName)
+	if err != nil {
+		return empty
+	}
+	CACHEREF[paramName] = paramData
 
 	// Iterate over param data to get ssm:// references
 	for i := range CACHEREF[paramName] {
@@ -89,13 +93,18 @@ func (s ssmClient) SingleParam(paramName string) map[string]string {
 			keyName := strings.Trim(CACHEREF[paramName][i], "ssm://")
 
 			// Request param store for the key above and store it in the CACHEREF
-			CACHEREF[keyName] = s.CacheRequestedParam(keyName)
+			paramReferenceData, err := s.CacheRequestedParam(keyName)
+			if err != nil {
+				return empty
+			}
+			CACHEREF[keyName] = paramReferenceData
 
 			// If the reference json data has the key required, get the value
 			if val, ok := CACHEREF[keyName][i]; ok {
 				CACHEREF[paramName][i] = val
 				// If the reference json data does not have the key we require, return empty
 			} else {
+				log.Printf("Error: Key %s in parameter reference %s was not found.\n", i, keyName)
 				return empty
 			}
 		}
@@ -103,30 +112,32 @@ func (s ssmClient) SingleParam(paramName string) map[string]string {
 	return CACHEREF[paramName]
 }
 
-func (s ssmClient) CacheRequestedParam(paramName string) map[string]string {
+func (s ssmClient) CacheRequestedParam(paramName string) (map[string]string, error) {
 	empty := make(map[string]string)
 
 	if _, ok := CACHEREF[paramName]; ok {
 		if DebugMode {
-			fmt.Printf("%s is already cached, skipping\n", paramName)
+			log.Printf("%s is already cached, skipping\n", paramName)
 		}
-		return CACHEREF[paramName]
+		return CACHEREF[paramName], nil
 	}
 
 	pi := &ssm.GetParameterInput{Name: aws.String(paramName),
 		WithDecryption: aws.Bool(true)}
+
 	r, err := s.client.GetParameter(pi)
 	if err != nil {
-		fmt.Println(err.Error())
-		return empty
-	}
-	ret, err := Deserialize(*r.Parameter.Value)
-	if err != nil {
-		fmt.Println(err)
-		return empty
+		log.Printf("%s, parameter name: %s\n", err.Error(), paramName)
+		return empty, err
 	}
 
-	return ret
+	ret, err := Deserialize(*r.Parameter.Value)
+	if err != nil {
+		log.Println(err)
+		return empty, err
+	}
+
+	return ret, nil
 }
 
 ////// ANYTHING BEYOND THIS POINT IS FOR NON-SINGLE KEY MODE ONLY
