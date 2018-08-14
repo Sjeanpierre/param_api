@@ -94,10 +94,8 @@ func (s ssmClient) SingleParam(paramName string) map[string]string {
 			// If the reference json data has the key required, get the value
 			if val, ok := CACHEREF[keyName][i]; ok {
 				CACHEREF[paramName][i] = val
-				fmt.Printf("Found key %s with value %s", i, val)
 				// If the reference json data does not have the key we require, return empty
 			} else {
-				fmt.Printf("Not Found: key %s", i)
 				return empty
 			}
 		}
