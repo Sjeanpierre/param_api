@@ -1,18 +1,19 @@
 package main
 
-import "fmt"
 import (
-	"github.com/aws/aws-sdk-go/service/ssm"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/ioutil"
 	"log"
 	"strings"
-	"errors"
-	"encoding/base64"
-	"compress/gzip"
-	"io/ioutil"
-	"encoding/json"
-	"bytes"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ssm"
 )
 
 type ssmClient struct {
@@ -41,9 +42,66 @@ func NewClient(region string) *ssm.SSM {
 	return ssm.New(session)
 }
 
+var (
+	CACHEREF = map[string]map[string]string{}
+)
+
+func Deserialize(encoded string) (map[string]string, error) {
+	params := make(map[string]string)
+	compressed, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		error := fmt.Sprintf("Error decoding value returned by single key param: %s", err.Error())
+		return params, errors.New(error)
+	}
+	gz, err := gzip.NewReader(bytes.NewBuffer(compressed))
+	defer gz.Close()
+	if err != nil {
+		error := fmt.Sprintf("Error decompressing value returned by single key param: %s", err.Error())
+		return params, errors.New(error)
+	}
+	jsonData, err := ioutil.ReadAll(gz)
+	if err != nil {
+		error := fmt.Sprintf("Error reading decompressed json stream: %s", err.Error())
+		return params, errors.New(error)
+	}
+	err = json.Unmarshal(jsonData, &params)
+	if err != nil {
+		error := fmt.Sprintf("Error unmarshalling JSON to struct: %s", err.Error())
+		return params, errors.New(error)
+	}
+	return params, nil
+}
+
+////// SINGLE KEY MODE ONLY
+//////
+//////
+//////
 func (s ssmClient) SingleParam(paramName string) map[string]string {
+	// Get requested parameter
+	CACHEREF[paramName] = s.CacheRequestedParam(paramName)
+
+	// Iterate over param data to get ssm:// references
+	for i := range CACHEREF[paramName] {
+		if strings.HasPrefix(CACHEREF[paramName][i], "ssm://") {
+			CACHEREF[paramName][i] = strings.Trim(CACHEREF[paramName][i], "ssm://")
+			CACHEREF[CACHEREF[paramName][i]] = s.CacheRequestedParam(CACHEREF[paramName][i])
+			CACHEREF[paramName][i] = CACHEREF[CACHEREF[paramName][i]][i]
+		}
+	}
+	return CACHEREF[paramName]
+}
+
+func (s ssmClient) CacheRequestedParam(paramName string) map[string]string {
 	empty := make(map[string]string)
-	pi := &ssm.GetParameterInput{Name: &paramName,
+
+	if _, ok := CACHEREF[paramName]; ok {
+		if DebugMode {
+			fmt.Printf("%s is already cached, skipping\n", paramName)
+		}
+		return CACHEREF[paramName]
+	}
+
+	pi := &ssm.GetParameterInput{Name: aws.String(paramName),
 		WithDecryption: aws.Bool(true)}
 	r, err := s.client.GetParameter(pi)
 	if err != nil {
@@ -55,9 +113,14 @@ func (s ssmClient) SingleParam(paramName string) map[string]string {
 		fmt.Println(err)
 		return empty
 	}
+
 	return ret
 }
 
+////// ANYTHING BEYOND THIS POINT IS FOR NON-SINGLE KEY MODE ONLY
+//////
+//////
+//////
 func (s ssmClient) WithPrefix(prefix string) parameters {
 	var names parameters
 	resp, err := s.ParamList(prefix)
@@ -161,32 +224,6 @@ func (p parameters) withVersion(version string) map[string]string {
 		paramsDoc[envName] = ver.Value
 	}
 	return paramsDoc
-}
-
-func Deserialize(encoded string) (map[string]string, error) {
-	params := make(map[string]string)
-	compressed, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		error := fmt.Sprintf("Error decoding value returned by single key param: %s", err.Error())
-		return params, errors.New(error)
-	}
-	gz, err := gzip.NewReader(bytes.NewBuffer(compressed))
-	defer gz.Close()
-	if err != nil {
-		error := fmt.Sprintf("Error decompressing value returned by single key param: %s", err.Error())
-		return params, errors.New(error)
-	}
-	jsonData, err := ioutil.ReadAll(gz)
-	if err != nil {
-		error := fmt.Sprintf("Error reading decompressed json stream: %s", err.Error())
-		return params, errors.New(error)
-	}
-	err = json.Unmarshal(jsonData, &params)
-	if err != nil {
-		error := fmt.Sprintf("Error unmarshalling JSON to struct: %s", err.Error())
-		return params, errors.New(error)
-	}
-	return params, nil
 }
 
 func (p parameter) containsVersion(version string) (paramHistory, error) {
