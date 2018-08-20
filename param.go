@@ -1,18 +1,19 @@
 package main
 
-import "fmt"
 import (
-	"github.com/aws/aws-sdk-go/service/ssm"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/ioutil"
 	"log"
 	"strings"
-	"errors"
-	"encoding/base64"
-	"compress/gzip"
-	"io/ioutil"
-	"encoding/json"
-	"bytes"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ssm"
 )
 
 type ssmClient struct {
@@ -41,23 +42,108 @@ func NewClient(region string) *ssm.SSM {
 	return ssm.New(session)
 }
 
-func (s ssmClient) SingleParam(paramName string) map[string]string {
-	empty := make(map[string]string)
-	pi := &ssm.GetParameterInput{Name: &paramName,
-		WithDecryption: aws.Bool(true)}
-	r, err := s.client.GetParameter(pi)
+var (
+	CACHEREF = map[string]map[string]string{}
+)
+
+func Deserialize(encoded string) (map[string]string, error) {
+	params := make(map[string]string)
+	compressed, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		fmt.Println(err.Error())
-		return empty
+		error := fmt.Sprintf("Error decoding value returned by single key param: %s", err.Error())
+		return params, errors.New(error)
 	}
-	ret, err := Deserialize(*r.Parameter.Value)
+	gz, err := gzip.NewReader(bytes.NewBuffer(compressed))
+	defer gz.Close()
 	if err != nil {
-		fmt.Println(err)
-		return empty
+		error := fmt.Sprintf("Error decompressing value returned by single key param: %s", err.Error())
+		return params, errors.New(error)
 	}
-	return ret
+	jsonData, err := ioutil.ReadAll(gz)
+	if err != nil {
+		error := fmt.Sprintf("Error reading decompressed json stream: %s", err.Error())
+		return params, errors.New(error)
+	}
+	err = json.Unmarshal(jsonData, &params)
+	if err != nil {
+		error := fmt.Sprintf("Error unmarshalling JSON to struct: %s", err.Error())
+		return params, errors.New(error)
+	}
+	return params, nil
 }
 
+////// SINGLE KEY MODE ONLY
+//////
+//////
+//////
+func (s ssmClient) SingleParam(paramName string) map[string]string {
+	empty := make(map[string]string)
+
+	// Get requested parameter
+	paramData, err := s.CacheRequestedParam(paramName)
+	if err != nil {
+		return empty
+	}
+	CACHEREF[paramName] = paramData
+
+	// Iterate over param data to get ssm:// references
+	for i := range CACHEREF[paramName] {
+		if strings.HasPrefix(CACHEREF[paramName][i], "ssm://") {
+			// Trim the ssm:// off of the key so we know the full name of the param to get
+			keyName := strings.Trim(CACHEREF[paramName][i], "ssm://")
+
+			// Request param store for the key above and store it in the CACHEREF
+			paramReferenceData, err := s.CacheRequestedParam(keyName)
+			if err != nil {
+				return empty
+			}
+			CACHEREF[keyName] = paramReferenceData
+
+			// If the reference json data has the key required, get the value
+			if val, ok := CACHEREF[keyName][i]; ok {
+				CACHEREF[paramName][i] = val
+				// If the reference json data does not have the key we require, return empty
+			} else {
+				log.Printf("Error: Key %s in parameter reference %s was not found.\n", i, keyName)
+				return empty
+			}
+		}
+	}
+	return CACHEREF[paramName]
+}
+
+func (s ssmClient) CacheRequestedParam(paramName string) (map[string]string, error) {
+	empty := make(map[string]string)
+
+	if _, ok := CACHEREF[paramName]; ok {
+		if DebugMode {
+			log.Printf("%s is already cached, skipping\n", paramName)
+		}
+		return CACHEREF[paramName], nil
+	}
+
+	pi := &ssm.GetParameterInput{Name: aws.String(paramName),
+		WithDecryption: aws.Bool(true)}
+
+	r, err := s.client.GetParameter(pi)
+	if err != nil {
+		log.Printf("%s, parameter name: %s\n", err.Error(), paramName)
+		return empty, err
+	}
+
+	ret, err := Deserialize(*r.Parameter.Value)
+	if err != nil {
+		log.Println(err)
+		return empty, err
+	}
+
+	return ret, nil
+}
+
+////// ANYTHING BEYOND THIS POINT IS FOR NON-SINGLE KEY MODE ONLY
+//////
+//////
+//////
 func (s ssmClient) WithPrefix(prefix string) parameters {
 	var names parameters
 	resp, err := s.ParamList(prefix)
@@ -161,32 +247,6 @@ func (p parameters) withVersion(version string) map[string]string {
 		paramsDoc[envName] = ver.Value
 	}
 	return paramsDoc
-}
-
-func Deserialize(encoded string) (map[string]string, error) {
-	params := make(map[string]string)
-	compressed, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		error := fmt.Sprintf("Error decoding value returned by single key param: %s", err.Error())
-		return params, errors.New(error)
-	}
-	gz, err := gzip.NewReader(bytes.NewBuffer(compressed))
-	defer gz.Close()
-	if err != nil {
-		error := fmt.Sprintf("Error decompressing value returned by single key param: %s", err.Error())
-		return params, errors.New(error)
-	}
-	jsonData, err := ioutil.ReadAll(gz)
-	if err != nil {
-		error := fmt.Sprintf("Error reading decompressed json stream: %s", err.Error())
-		return params, errors.New(error)
-	}
-	err = json.Unmarshal(jsonData, &params)
-	if err != nil {
-		error := fmt.Sprintf("Error unmarshalling JSON to struct: %s", err.Error())
-		return params, errors.New(error)
-	}
-	return params, nil
 }
 
 func (p parameter) containsVersion(version string) (paramHistory, error) {
